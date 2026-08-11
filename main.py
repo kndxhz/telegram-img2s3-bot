@@ -179,7 +179,7 @@ async def process_image_messages(messages):
 
         object_key, image_url = result
         reply = f"""\
-上传完成：
+上传完成！
 文件名:
 `{object_key}`
 链接:
