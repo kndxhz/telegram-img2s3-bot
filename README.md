@@ -10,7 +10,6 @@
 2. 安装依赖：
     ```bash
     uv sync
-    uv venv
     ```
 3. 配置环境变量：
    - 复制`.env_example`为`.env`：
