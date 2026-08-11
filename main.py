@@ -1,7 +1,11 @@
+import asyncio
 import logging
 import os
 from pathlib import Path
+from urllib.parse import quote, urljoin
 
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 from dotenv import load_dotenv
 from PIL import Image
 from telegram import Update
@@ -13,13 +17,14 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
-import boto3
 
 load_dotenv()
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "")
 SOCKS_PROXY = os.getenv("SOCKS_PROXY")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 AWS_S3_HOST = os.getenv("AWS_S3_HOST")
+AWS_S3_BUCKET = os.getenv("AWS_S3_BUCKET")
+AWS_S3_PUBLIC_URL = os.getenv("AWS_S3_PUBLIC_URL")
 AWS_ACCESS_ACCESS_KEY = os.getenv("AWS_ACCESS_ACCESS_KEY")
 AWS_SECRET_SECRET_KEY = os.getenv("AWS_SECRET_SECRET_KEY")
 
@@ -59,6 +64,12 @@ async def handle_error(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 async def process_image(update: Update, context: CallbackContext):
     message = update.effective_message
+    logger.info(
+        "[%s][%s] %s",
+        update.effective_user.id if update.effective_user else "unknown",
+        getattr(update.effective_user, "full_name", "unknown"),
+        message.text if message else "",
+    )
     if not message:
         return
 
@@ -88,6 +99,7 @@ async def process_image(update: Update, context: CallbackContext):
         await message.reply_text("请发送图片文件。")
         return
 
+    await message.reply_text("正在处理图片，请稍候...")
     # 转换为无损 WebP
     output_path = Path("processed") / f"{file.file_id}.webp"
 
@@ -104,14 +116,61 @@ async def process_image(update: Update, context: CallbackContext):
         )
 
     await compress_and_upload(str(output_path), update, context)
+    os.remove(file_path)
 
 
 async def compress_and_upload(
     output_path: str, update: Update, context: CallbackContext
 ):
     message = update.effective_message
-    if message:
-        await message.reply_text(f"已处理并保存：{output_path}")
+    if not message:
+        return
+    if (
+        not AWS_S3_HOST
+        or not AWS_S3_BUCKET
+        or not AWS_ACCESS_ACCESS_KEY
+        or not AWS_SECRET_SECRET_KEY
+    ):
+        await message.reply_text("S3 配置未设置，请联系管理员。")
+        return
+
+    await message.reply_text("正在上传到 S3，请稍候...")
+
+    path = Path(output_path)
+    object_key = path.name
+    s3_client = boto3.client(
+        "s3",
+        endpoint_url=AWS_S3_HOST,
+        aws_access_key_id=AWS_ACCESS_ACCESS_KEY,
+        aws_secret_access_key=AWS_SECRET_SECRET_KEY,
+    )
+
+    try:
+        await asyncio.to_thread(
+            s3_client.upload_file,
+            str(path),
+            AWS_S3_BUCKET,
+            object_key,
+            ExtraArgs={"ContentType": "image/webp"},
+        )
+    except (BotoCoreError, ClientError, OSError) as exc:
+        logger.exception("Failed to upload image to S3: %s", output_path)
+        await message.reply_text(f"上传失败：{exc}")
+        return
+
+    public_base_url = AWS_S3_PUBLIC_URL or f"{AWS_S3_HOST.rstrip('/')}/{AWS_S3_BUCKET}"
+    image_url = urljoin(f"{public_base_url.rstrip('/')}/", quote(object_key))
+
+    os.remove(output_path)
+    for ext in (".jpg", ".jpeg", ".png"):
+        try:
+            p = Path(output_path).with_suffix(ext)
+            if p.exists():
+                p.unlink()
+        except OSError:
+            pass
+    reply_text = f"上传完成：链接:\n`{image_url}`\nmarkdown:\n`![image]({image_url})`"
+    await message.reply_text(reply_text, disable_web_page_preview=True, parse_mode="Markdown")
 
 
 def main():
