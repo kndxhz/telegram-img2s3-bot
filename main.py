@@ -171,7 +171,11 @@ async def compress_and_upload(
                 p.unlink()
         except OSError:
             pass
-    reply_text = f"上传完成：链接:\n`{image_url}`\nmarkdown:\n`![image]({image_url})`"
+    reply_text = f"""\
+上传完成：
+文件名:`{object_key}`
+链接:`{image_url}`
+markdown:`![image]({image_url})`"""
     await message.reply_text(
         reply_text, disable_web_page_preview=True, parse_mode="Markdown"
     )
@@ -194,6 +198,54 @@ def install_ctrl_c_handler(application):
     signal.signal(signal.SIGINT, handle_sigint)
 
 
+async def del_image(update: Update, context: CallbackContext):
+    message = update.effective_message
+    if not message:
+        return
+
+    if update.effective_chat and update.effective_chat.id != CHAT_ID:
+        await message.reply_text("你未取得授权使用此机器人，请联系管理员。")
+        return
+
+    if not context.args:
+        await message.reply_text(
+            "请添加想要删除的文件名\n例如`/del aabbcc.webp`",
+            parse_mode="Markdown",
+        )
+        return
+
+    if (
+        not AWS_S3_HOST
+        or not AWS_S3_BUCKET
+        or not AWS_ACCESS_ACCESS_KEY
+        or not AWS_SECRET_SECRET_KEY
+    ):
+        await message.reply_text("S3 配置未设置，请联系管理员。")
+        return
+
+    filename = Path(context.args[0]).name
+    object_key = filename if Path(filename).suffix else f"{filename}.webp"
+    s3_client = boto3.client(
+        "s3",
+        endpoint_url=AWS_S3_HOST,
+        aws_access_key_id=AWS_ACCESS_ACCESS_KEY,
+        aws_secret_access_key=AWS_SECRET_SECRET_KEY,
+    )
+
+    try:
+        await asyncio.to_thread(
+            s3_client.delete_object,
+            Bucket=AWS_S3_BUCKET,
+            Key=object_key,
+        )
+    except (BotoCoreError, ClientError) as exc:
+        logger.exception("Failed to delete image from S3: %s", object_key)
+        await message.reply_text(f"删除失败：{exc}")
+        return
+
+    await message.reply_text(f"删除完成：`{object_key}`", parse_mode="Markdown")
+
+
 def main():
     builder = ApplicationBuilder().token(TG_BOT_TOKEN)
     if SOCKS_PROXY:
@@ -202,6 +254,7 @@ def main():
     application = builder.build()
     install_ctrl_c_handler(application)
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("del", del_image))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, start))
     application.add_handler(
         MessageHandler(filters.PHOTO | filters.Document.IMAGE, process_image)
