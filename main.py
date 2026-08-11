@@ -169,15 +169,15 @@ async def process_image_messages(messages):
         return_exceptions=True,
     )
 
-    successes = [result for result in results if isinstance(result, tuple)]
-    failures = [result for result in results if isinstance(result, Exception)]
+    for message, result in zip(messages, results, strict=False):
+        if isinstance(result, Exception):
+            await reply_text(message, f"上传失败：{result}")
+            continue
+        if not isinstance(result, tuple):
+            await reply_text(message, "上传失败：未知错误")
+            continue
 
-    if not successes:
-        await reply_text(messages[0], f"上传失败：{failures[0]}")
-        return
-
-    if len(successes) == 1:
-        object_key, image_url = successes[0]
+        object_key, image_url = result
         reply = f"""\
 上传完成：
 文件名:
@@ -186,23 +186,9 @@ async def process_image_messages(messages):
 `{image_url}`
 markdown:
 `![image]({image_url})`"""
-    else:
-        lines = ["上传完成："]
-        for index, (object_key, image_url) in enumerate(successes, start=1):
-            lines.extend(
-                [
-                    f"{index}. `{object_key}`",
-                    f"链接: `{image_url}`",
-                    f"markdown: `![image]({image_url})`",
-                ]
-            )
-        if failures:
-            lines.append(f"失败：{len(failures)} 张")
-        reply = "\n".join(lines)
-
-    await reply_text(
-        messages[0], reply, disable_web_page_preview=True, parse_mode="Markdown"
-    )
+        await reply_text(
+            message, reply, disable_web_page_preview=True, parse_mode="Markdown"
+        )
 
 
 async def download_compress_and_upload(message):
