@@ -171,9 +171,12 @@ async def compress_and_upload(
             pass
     reply_text = f"""\
 上传完成：
-文件名:`{object_key}`
-链接:`{image_url}`
-markdown:`![image]({image_url})`"""
+文件名:
+`{object_key}`
+链接:
+`{image_url}`
+markdown:
+`![image]({image_url})`"""
     await message.reply_text(
         reply_text, disable_web_page_preview=True, parse_mode="Markdown"
     )
