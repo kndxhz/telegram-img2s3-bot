@@ -1,4 +1,5 @@
 import asyncio
+import ctypes
 import logging
 import os
 from pathlib import Path
@@ -38,6 +39,8 @@ logging.basicConfig(
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
+_WINDOWS_CTRL_HANDLER = None
+_STOP_REQUESTED = False
 
 
 async def start(update: Update, context: CallbackContext):
@@ -60,6 +63,19 @@ async def start(update: Update, context: CallbackContext):
 
 async def handle_error(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.exception("Exception while handling an update", exc_info=context.error)
+
+
+async def stop(update: Update, context: CallbackContext):
+    message = update.effective_message
+    if not message:
+        return
+
+    if update.effective_chat and update.effective_chat.id != CHAT_ID:
+        await message.reply_text("你未取得授权使用此机器人，请联系管理员。")
+        return
+
+    await message.reply_text("正在停止机器人...")
+    context.application.stop_running()
 
 
 async def process_image(update: Update, context: CallbackContext):
@@ -170,7 +186,40 @@ async def compress_and_upload(
         except OSError:
             pass
     reply_text = f"上传完成：链接:\n`{image_url}`\nmarkdown:\n`![image]({image_url})`"
-    await message.reply_text(reply_text, disable_web_page_preview=True, parse_mode="Markdown")
+    await message.reply_text(
+        reply_text, disable_web_page_preview=True, parse_mode="Markdown"
+    )
+
+
+def install_windows_ctrl_handler(application):
+    if os.name != "nt":
+        return
+
+    ctrl_c_event = 0
+    ctrl_break_event = 1
+    ctrl_close_event = 2
+    handler_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_uint)
+
+    def handle_ctrl_event(ctrl_type):
+        global _STOP_REQUESTED
+
+        if ctrl_type not in (ctrl_c_event, ctrl_break_event, ctrl_close_event):
+            return False
+
+        if _STOP_REQUESTED:
+            os._exit(1)
+
+        _STOP_REQUESTED = True
+        logger.info("Received console stop signal, stopping bot...")
+        try:
+            application.stop_running()
+        except RuntimeError:
+            os._exit(0)
+        return True
+
+    global _WINDOWS_CTRL_HANDLER
+    _WINDOWS_CTRL_HANDLER = handler_type(handle_ctrl_event)
+    ctypes.windll.kernel32.SetConsoleCtrlHandler(_WINDOWS_CTRL_HANDLER, True)
 
 
 def main():
@@ -179,14 +228,16 @@ def main():
         builder = builder.proxy(SOCKS_PROXY).get_updates_proxy(SOCKS_PROXY)
 
     application = builder.build()
+    install_windows_ctrl_handler(application)
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("stop", stop))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, start))
     application.add_handler(
         MessageHandler(filters.PHOTO | filters.Document.IMAGE, process_image)
     )
     application.add_error_handler(handle_error)
 
-    application.run_polling()
+    application.run_polling(timeout=1)
 
 
 if __name__ == "__main__":
