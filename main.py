@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import signal
 from pathlib import Path
 from urllib.parse import quote, urljoin
 
@@ -38,6 +39,7 @@ logging.basicConfig(
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
+_STOP_REQUESTED = False
 
 
 async def start(update: Update, context: CallbackContext):
@@ -170,7 +172,26 @@ async def compress_and_upload(
         except OSError:
             pass
     reply_text = f"上传完成：链接:\n`{image_url}`\nmarkdown:\n`![image]({image_url})`"
-    await message.reply_text(reply_text, disable_web_page_preview=True, parse_mode="Markdown")
+    await message.reply_text(
+        reply_text, disable_web_page_preview=True, parse_mode="Markdown"
+    )
+
+
+def install_ctrl_c_handler(application):
+    def handle_sigint(signum, frame):
+        global _STOP_REQUESTED
+
+        if _STOP_REQUESTED:
+            os._exit(1)
+
+        _STOP_REQUESTED = True
+        logger.info("Ctrl+C received, stopping bot. Press Ctrl+C again to force exit.")
+        try:
+            application.stop_running()
+        except RuntimeError:
+            os._exit(0)
+
+    signal.signal(signal.SIGINT, handle_sigint)
 
 
 def main():
@@ -179,6 +200,7 @@ def main():
         builder = builder.proxy(SOCKS_PROXY).get_updates_proxy(SOCKS_PROXY)
 
     application = builder.build()
+    install_ctrl_c_handler(application)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, start))
     application.add_handler(
@@ -186,7 +208,7 @@ def main():
     )
     application.add_error_handler(handle_error)
 
-    application.run_polling()
+    application.run_polling(stop_signals=None)
 
 
 if __name__ == "__main__":
