@@ -278,22 +278,58 @@ async def del_image(update: Update, context: CallbackContext):
         await reply_text(message, "S3 配置未设置，请联系管理员。")
         return
 
-    filename = Path(context.args[0]).name
-    object_key = filename if Path(filename).suffix else f"{filename}.webp"
-    s3_client = build_s3_client()
+    object_keys = []
+    for arg in context.args:
+        filename = Path(arg).name
+        if filename:
+            object_keys.append(
+                filename if Path(filename).suffix else f"{filename}.webp"
+            )
 
-    try:
-        await asyncio.to_thread(
-            s3_client.delete_object,
-            Bucket=AWS_S3_BUCKET,
-            Key=object_key,
+    if not object_keys:
+        await reply_text(
+            message,
+            "请添加想要删除的文件名\n例如`/del aabbcc.webp`",
+            parse_mode="Markdown",
         )
-    except (BotoCoreError, ClientError) as exc:
-        logger.exception("Failed to delete image from S3: %s", object_key)
-        await reply_text(message, f"删除失败：{exc}")
         return
 
-    await reply_text(message, f"删除完成：`{object_key}`", parse_mode="Markdown")
+    s3_client = build_s3_client()
+
+    async def delete_object(object_key: str):
+        await asyncio.to_thread(
+            s3_client.delete_object, Bucket=AWS_S3_BUCKET, Key=object_key
+        )
+        return object_key
+
+    results = await asyncio.gather(
+        *(delete_object(object_key) for object_key in object_keys),
+        return_exceptions=True,
+    )
+    successes = [result for result in results if isinstance(result, str)]
+    failures = [
+        (object_key, result)
+        for object_key, result in zip(object_keys, results, strict=False)
+        if isinstance(result, Exception)
+    ]
+
+    for object_key, exc in failures:
+        logger.exception("Failed to delete image from S3: %s", object_key, exc_info=exc)
+
+    if not successes:
+        await reply_text(message, f"删除失败：{failures[0][1]}")
+        return
+
+    if len(successes) == 1 and not failures:
+        reply = f"删除完成：`{successes[0]}`"
+    else:
+        lines = ["删除完成："]
+        lines.extend(f"`{object_key}`" for object_key in successes)
+        if failures:
+            lines.append(f"失败：{len(failures)} 个")
+        reply = "\n".join(lines)
+
+    await reply_text(message, reply, parse_mode="Markdown")
 
 
 def main():
