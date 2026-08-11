@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-import signal
 from pathlib import Path
 from urllib.parse import quote, urljoin
 
@@ -39,7 +38,6 @@ logging.basicConfig(
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
-_STOP_REQUESTED = False
 
 
 async def start(update: Update, context: CallbackContext):
@@ -181,23 +179,6 @@ markdown:`![image]({image_url})`"""
     )
 
 
-def install_ctrl_c_handler(application):
-    def handle_sigint(signum, frame):
-        global _STOP_REQUESTED
-
-        if _STOP_REQUESTED:
-            os._exit(1)
-
-        _STOP_REQUESTED = True
-        logger.info("Ctrl+C received, stopping bot. Press Ctrl+C again to force exit.")
-        try:
-            application.stop_running()
-        except RuntimeError:
-            os._exit(0)
-
-    signal.signal(signal.SIGINT, handle_sigint)
-
-
 async def del_image(update: Update, context: CallbackContext):
     message = update.effective_message
     if not message:
@@ -252,7 +233,6 @@ def main():
         builder = builder.proxy(SOCKS_PROXY).get_updates_proxy(SOCKS_PROXY)
 
     application = builder.build()
-    install_ctrl_c_handler(application)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("del", del_image))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, start))
